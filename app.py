@@ -1,11 +1,87 @@
+import streamlit as st
+import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 import re
-import json
-import csv
-import os
-from urllib.parse import urlparse
+import json # We need the json library to read the uploaded file
 
+# ==============================================================================
+# CORE LOGIC FUNCTION (This part remains the same)
+# ==============================================================================
+def find_provisions_in_agreements(urls, keywords):
+    """
+    This function contains the main scraping and searching logic.
+    It takes a list of URLs and keywords, and returns the results.
+    """
+    all_results = []
+    
+    progress_bar = st.progress(0, text="Initializing...")
+    total_urls = len(urls)
+
+    for i, url in enumerate(urls):
+        progress_text = f"Processing agreement {i+1}/{total_urls}..."
+        progress_bar.progress((i) / total_urls, text=progress_text)
+
+        try:
+            response = requests.get(url, timeout=15)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, 'html.parser')
+
+            # --- Group Name Extraction Logic ---
+            group_name = "N/A"
+            group_tag = soup.find(string=re.compile(r'Group:'))
+            if group_tag:
+                parent_element = group_tag.find_parent()
+                if parent_element:
+                    match = re.search(r'Group:\s*(.*)', parent_element.get_text(strip=True))
+                    if match:
+                        extracted_group_name = match.group(1).strip()
+                        group_name = re.sub(r'\(.*\)', '', extracted_group_name).strip()
+
+            # --- Content Grouping Logic ---
+            grouped_sections = []
+            main_content_section = soup.find('div', class_='mwsgeneric-base-html')
+            if main_content_section:
+                elements = main_content_section.find_all(['p', 'h2', 'h3', 'h4', 'h5', 'h6'])
+                current_section_elements = []
+                for element in elements:
+                    if element.name in ['h2', 'h3']:
+                        if current_section_elements: grouped_sections.append(current_section_elements)
+                        current_section_elements = [element]
+                    else:
+                        current_section_elements.append(element)
+                if current_section_elements: grouped_sections.append(current_section_elements)
+            
+            # --- Keyword Searching Logic ---
+            if grouped_sections and keywords:
+                for section_elements in grouped_sections:
+                    section_text = ' '.join(elem.get_text() for elem in section_elements)
+                    found_keywords_in_section = [kw for kw in keywords if kw.lower() in section_text.lower()]
+                    
+                    if found_keywords_in_section:
+                        display_content = "\n\n".join(elem.get_text(strip=True) for elem in section_elements if elem.get_text(strip=True))
+                        all_results.append({
+                            'Group': group_name,
+                            'Keyword Found': ', '.join(sorted(list(set(found_keywords_in_section)))),
+                            'Provision': display_content
+                        })
+
+        except requests.exceptions.RequestException as e:
+            st.error(f"Could not process {url}. Error: {e}")
+            continue
+
+    progress_bar.progress(1.0, text="Completed!")
+    return all_results
+
+# ==============================================================================
+# STREAMLIT USER INTERFACE (Updated for File Upload)
+# ==============================================================================
+
+st.set_page_config(layout="wide")
+st.title("📄 Collective Agreement Provision Finder")
+st.info("Please upload the `task.json` file provided by the Radia Agent. Then, click 'Find Provisions' to begin the analysis.")
+
+# List of URLs from your script
 list_of_webpage_urls = [
     'https://www.canada.ca/en/treasury-board-secretariat/topics/pay/collective-agreements/ai.html',
     'https://www.canada.ca/en/treasury-board-secretariat/topics/pay/collective-agreements/ao.html',
@@ -37,157 +113,44 @@ list_of_webpage_urls = [
     'https://www.canada.ca/en/treasury-board-secretariat/topics/pay/collective-agreements/ut.html',
 ]
 
-json_file_path = 'task.json'
-output_csv_file_path = 'results.csv'
-all_results = [] # Initialize list to store results from all URLs
+# STEP 1: The user uploads the task.json file
+uploaded_file = st.file_uploader("Upload your task.json file", type=["json"])
 
-# Load keywords once outside the loop
-keywords = []
-try:
-    with open(json_file_path, 'r') as f:
-        data = json.load(f)
-        keywords = data.get('search_keywords', [])
-    print(f"Successfully loaded {len(keywords)} keywords.")
-except Exception as e:
-    print(f"Error loading keywords: {e}")
-
-for url in list_of_webpage_urls:
-    print(f"Processing URL: {url}")
-    html_content = None
-    soup = None
-    group_name = "N/A" # Initialize group name
-    grouped_sections = [] # List to hold BeautifulSoup elements, not text chunks
-
-    try:
-        response = requests.get(url)
-        response.raise_for_status()
-        html_content = response.text
-        print("Successfully fetched webpage content.")
-
-        soup = BeautifulSoup(html_content, 'html.parser')
-        print("Successfully parsed HTML content.")
-
-        # --- Extract Group Name ---
-        group_tag = soup.find(string=re.compile(r'Group:'))
-        if group_tag:
-            parent_element = group_tag.find_parent()
-            if parent_element:
-                parent_text = parent_element.get_text(strip=True)
-                match = re.search(r'Group:\s*(.*)', parent_text)
-                if match:
-                    extracted_group_name = match.group(1).strip()
-                    group_name = re.sub(r'\(.*\)', '', extracted_group_name).strip()
-                    print(f"Extracted Group Name: {group_name}")
-                else:
-                     print("Could not extract group name from the element text.")
+# STEP 2: A button to run the script
+if st.button("Find Provisions"):
+    if uploaded_file is not None:
+        # Read the keywords from the uploaded JSON file
+        try:
+            data = json.load(uploaded_file)
+            keywords = data.get('search_keywords', [])
+            
+            if not keywords:
+                st.error("Error: The 'task.json' file does not contain a 'search_keywords' list or the list is empty.")
             else:
-                print("Could not find parent element for 'Group:' text.")
-        else:
-            print("Could not find 'Group:' text on the page.")
-        # --- End Extract Group Name ---
+                st.info(f"Keywords loaded: {', '.join(keywords)}")
+                # Call your main logic function
+                results = find_provisions_in_agreements(list_of_webpage_urls, keywords)
 
-        main_content_section = soup.find('div', class_='mwsgeneric-base-html')
-
-        if main_content_section:
-            elements = main_content_section.find_all(['p', 'h2', 'h3', 'h4', 'h5', 'h6'])
-
-            current_section_elements = []
-            for element in elements:
-                if element.name in ['h2', 'h3']:
-                    if current_section_elements:
-                        grouped_sections.append(current_section_elements)
-                    current_section_elements = [element]
-                elif element.name in ['h4', 'h5', 'h6', 'p']:
-                    current_section_elements.append(element)
-
-            if current_section_elements:
-                grouped_sections.append(current_section_elements)
-
-            print(f"Content grouped into {len(grouped_sections)} sections (BeautifulSoup elements).")
-
-        else:
-            print("Could not find the 'mwsgeneric-base-html' section for the main content.")
-            grouped_sections = []
-
-
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching webpage {url}: {e}")
-        html_content = None
-        soup = None
-        group_name = "Error Fetching"
-        grouped_sections = []
-
-
-    if grouped_sections and keywords:
-        current_url_matches_count = 0 # Counter for matches in the current URL
-        for section_elements in grouped_sections:
-            section_heading = None
-            section_paragraphs = []
-            section_other_elements = []
-
-            # Separate heading, paragraphs, and other elements
-            for elem in section_elements:
-                if elem.name in ['h2', 'h3', 'h4', 'h5', 'h6'] and section_heading is None:
-                    section_heading = elem
-                elif elem.name == 'p':
-                    section_paragraphs.append(elem)
+                # STEP 3: Display results and provide a download button
+                if results:
+                    st.success(f"Found {len(results)} relevant provisions!")
+                    df = pd.DataFrame(results)
+                    st.dataframe(df, use_container_width=True, height=600)
+                    
+                    csv = df.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                       label="Download Results as CSV",
+                       data=csv,
+                       file_name="results.csv",
+                       mime="text/csv",
+                       key='download-csv' # Added a key for stability
+                    )
                 else:
-                    section_other_elements.append(elem) # Include other non-paragraph elements like lists if needed
+                    st.warning("No provisions found for the given keywords.")
 
-            matching_paragraphs_text = []
-            found_keywords_in_section = []
-
-            # Search for keywords only in paragraphs within the section
-            for paragraph in section_paragraphs:
-                paragraph_text = paragraph.get_text(strip=True)
-                if paragraph_text:
-                    found_keywords_in_paragraph = [keyword for keyword in keywords if keyword.lower() in paragraph_text.lower()]
-                    if found_keywords_in_paragraph:
-                        matching_paragraphs_text.append(paragraph_text)
-                        found_keywords_in_section.extend(found_keywords_in_paragraph)
-
-            # Add results if any paragraph in the section matched
-            if matching_paragraphs_text:
-                # Construct the output paragraph: Heading + Matching Paragraphs
-                output_paragraph_content = []
-                if section_heading:
-                    output_paragraph_content.append(section_heading.get_text(strip=True))
-
-                # Add other non-paragraph elements before matching paragraphs if they exist
-                for other_elem in section_other_elements:
-                     other_text = other_elem.get_text(strip=True)
-                     if other_text:
-                         output_paragraph_content.append(other_text)
-
-
-                output_paragraph_content.extend(matching_paragraphs_text) # Add the text of matching paragraphs
-
-
-                all_results.append({
-                    'Group': group_name,
-                    'Keyword': ', '.join(sorted(list(set(found_keywords_in_section)))), # Unique and sorted keywords
-                    'Paragraph': "\n\n".join(output_paragraph_content)
-                })
-                current_url_matches_count += 1
-
-
-        print(f"Found {current_url_matches_count} matching sections for Group: {group_name}.")
-    elif grouped_sections and not keywords:
-         print("Keywords not loaded. Skipping search for this URL.")
+        except json.JSONDecodeError:
+            st.error("Error: The uploaded file is not a valid JSON file.")
+        except Exception as e:
+            st.error(f"An unexpected error occurred: {e}")
     else:
-        print("No searchable content available for processing for this URL.")
-
-# --- Write all aggregated results to a CSV file after the loop ---
-if all_results:
-    with open(output_csv_file_path, 'w', newline='', encoding='utf-8') as csvfile:
-        fieldnames = ['Group', 'Keyword', 'Paragraph']
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(all_results)
-    print(f"\nSuccessfully wrote aggregated results to '{output_csv_file_path}'.")
-    print(f"Total matching chunks found across all URLs: {len(all_results)}")
-    print("You can find the file in the file pane on the left.")
-elif keywords:
-    print("\nNo matching chunks were found across all URLs.")
-else:
-    print("\nKeywords not loaded, no search was performed.")
+        st.warning("Please upload a task.json file before clicking 'Find Provisions'.")
