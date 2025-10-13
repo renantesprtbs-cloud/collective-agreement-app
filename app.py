@@ -3,22 +3,24 @@ import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 import re
-import json # We need the json library to read the uploaded file
 
 # ==============================================================================
-# CORE LOGIC FUNCTION (This part remains the same)
+# YOUR PROVEN LOGIC - MOVED INTO A FUNCTION
+# This is the core of your Colab script, now structured to work with Streamlit.
 # ==============================================================================
 def find_provisions_in_agreements(urls, keywords):
     """
-    This function contains the main scraping and searching logic.
+    This function contains the main scraping and searching logic from your Colab script.
     It takes a list of URLs and keywords, and returns the results.
     """
     all_results = []
     
+    # Create a progress bar to give the user feedback
     progress_bar = st.progress(0, text="Initializing...")
     total_urls = len(urls)
 
     for i, url in enumerate(urls):
+        # Update progress bar
         progress_text = f"Processing agreement {i+1}/{total_urls}..."
         progress_bar.progress((i) / total_urls, text=progress_text)
 
@@ -27,7 +29,7 @@ def find_provisions_in_agreements(urls, keywords):
             response.raise_for_status()
             soup = BeautifulSoup(response.text, 'html.parser')
 
-            # --- Group Name Extraction Logic ---
+            # --- Your Group Name Extraction Logic ---
             group_name = "N/A"
             group_tag = soup.find(string=re.compile(r'Group:'))
             if group_tag:
@@ -38,7 +40,7 @@ def find_provisions_in_agreements(urls, keywords):
                         extracted_group_name = match.group(1).strip()
                         group_name = re.sub(r'\(.*\)', '', extracted_group_name).strip()
 
-            # --- Content Grouping Logic ---
+            # --- Your Content Grouping Logic ---
             grouped_sections = []
             main_content_section = soup.find('div', class_='mwsgeneric-base-html')
             if main_content_section:
@@ -52,34 +54,39 @@ def find_provisions_in_agreements(urls, keywords):
                         current_section_elements.append(element)
                 if current_section_elements: grouped_sections.append(current_section_elements)
             
-            # --- Keyword Searching Logic ---
+            # --- Your Keyword Searching Logic ---
             if grouped_sections and keywords:
                 for section_elements in grouped_sections:
                     section_text = ' '.join(elem.get_text() for elem in section_elements)
+                    
+                    # Find which keywords match in the entire section text
                     found_keywords_in_section = [kw for kw in keywords if kw.lower() in section_text.lower()]
                     
                     if found_keywords_in_section:
+                        # Reconstruct the section content for display
                         display_content = "\n\n".join(elem.get_text(strip=True) for elem in section_elements if elem.get_text(strip=True))
+                        
                         all_results.append({
                             'Group': group_name,
-                            'Keyword Found': ', '.join(sorted(list(set(found_keywords_in_section)))),
+                            'Keyword': ', '.join(sorted(list(set(found_keywords_in_section)))),
                             'Provision': display_content
                         })
 
         except requests.exceptions.RequestException as e:
             st.error(f"Could not process {url}. Error: {e}")
-            continue
+            continue # Skip to the next URL if one fails
 
     progress_bar.progress(1.0, text="Completed!")
     return all_results
 
 # ==============================================================================
-# STREAMLIT USER INTERFACE (Updated for File Upload)
+# STREAMLIT USER INTERFACE CODE
+# This is the "menu" part of the app that the user will interact with.
 # ==============================================================================
 
 st.set_page_config(layout="wide")
 st.title("📄 Collective Agreement Provision Finder")
-st.info("Please upload the `task.json` file provided by the Radia Agent. Then, click 'Find Provisions' to begin the analysis.")
+st.info("Paste your keywords below, one per line or separated by commas. The app will scan all collective agreements and extract the relevant provisions.")
 
 # List of URLs from your script
 list_of_webpage_urls = [
@@ -113,44 +120,38 @@ list_of_webpage_urls = [
     'https://www.canada.ca/en/treasury-board-secretariat/topics/pay/collective-agreements/ut.html',
 ]
 
-# STEP 1: The user uploads the task.json file
-uploaded_file = st.file_uploader("Upload your task.json file", type=["json"])
+keyword_input = st.text_area(
+    "Enter Keywords",
+    height=150,
+    placeholder="e.g., severance pay, parental leave, remote work policy"
+)
 
-# STEP 2: A button to run the script
 if st.button("Find Provisions"):
-    if uploaded_file is not None:
-        # Read the keywords from the uploaded JSON file
-        try:
-            data = json.load(uploaded_file)
-            keywords = data.get('search_keywords', [])
-            
-            if not keywords:
-                st.error("Error: The 'task.json' file does not contain a 'search_keywords' list or the list is empty.")
-            else:
-                st.info(f"Keywords loaded: {', '.join(keywords)}")
-                # Call your main logic function
-                results = find_provisions_in_agreements(list_of_webpage_urls, keywords)
-
-                # STEP 3: Display results and provide a download button
-                if results:
-                    st.success(f"Found {len(results)} relevant provisions!")
-                    df = pd.DataFrame(results)
-                    st.dataframe(df, use_container_width=True, height=600)
-                    
-                    csv = df.to_csv(index=False).encode('utf-8')
-                    st.download_button(
-                       label="Download Results as CSV",
-                       data=csv,
-                       file_name="results.csv",
-                       mime="text/csv",
-                       key='download-csv' # Added a key for stability
-                    )
-                else:
-                    st.warning("No provisions found for the given keywords.")
-
-        except json.JSONDecodeError:
-            st.error("Error: The uploaded file is not a valid JSON file.")
-        except Exception as e:
-            st.error(f"An unexpected error occurred: {e}")
+    if not keyword_input.strip():
+        st.warning("Please enter at least one keyword.")
     else:
-        st.warning("Please upload a task.json file before clicking 'Find Provisions'.")
+        # Clean up the keyword input
+        keywords = [k.strip() for k in keyword_input.replace(',', '\n').split('\n') if k.strip()]
+        
+        # Call your logic function
+        results = find_provisions_in_agreements(list_of_webpage_urls, keywords)
+
+        if results:
+            st.success(f"Found {len(results)} relevant provisions!")
+            
+            # Convert results to a Pandas DataFrame for easy viewing and download
+            df = pd.DataFrame(results)
+            df = df[['Group', 'Keyword', 'Provision']] # Ensure column order
+            
+            st.dataframe(df, use_container_width=True, height=600)
+            
+            # Convert DataFrame to CSV for the download button
+            csv = df.to_csv(index=False).encode('utf-8')
+            st.download_button(
+               label="Download Results as CSV",
+               data=csv,
+               file_name="agreement_provisions.csv",
+               mime="text/csv",
+            )
+        else:
+            st.warning("No provisions found matching the given keywords across all agreements.")
