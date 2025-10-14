@@ -5,17 +5,17 @@ from bs4 import BeautifulSoup
 import re
 
 # ==============================================================================
-# YOUR PROVEN LOGIC - MOVED INTO A FUNCTION
-# This is the core of your Colab script, now structured to work with Streamlit.
+# CORE LOGIC FUNCTION
+# Combines the Streamlit structure with the expiry date extraction logic.
 # ==============================================================================
 def find_provisions_in_agreements(urls, keywords):
     """
-    This function contains the main scraping and searching logic from your Colab script.
-    It takes a list of URLs and keywords, and returns the results.
+    Scrapes a list of URLs for collective agreements, extracts key information,
+    and searches for provisions matching a list of keywords.
     """
     all_results = []
     
-    # Create a progress bar to give the user feedback
+    # Create a progress bar for user feedback in the Streamlit app
     progress_bar = st.progress(0, text="Initializing...")
     total_urls = len(urls)
 
@@ -29,18 +29,26 @@ def find_provisions_in_agreements(urls, keywords):
             response.raise_for_status()
             soup = BeautifulSoup(response.text, 'html.parser')
 
-            # --- Your Group Name Extraction Logic ---
+            # --- Extract Group Name (from new script) ---
             group_name = "N/A"
-            group_tag = soup.find(string=re.compile(r'Group:'))
-            if group_tag:
-                parent_element = group_tag.find_parent()
-                if parent_element:
-                    match = re.search(r'Group:\s*(.*)', parent_element.get_text(strip=True))
-                    if match:
-                        extracted_group_name = match.group(1).strip()
-                        group_name = re.sub(r'\(.*\)', '', extracted_group_name).strip()
+            title_tag = soup.find('title')
+            if title_tag:
+                title_text = title_tag.get_text(strip=True)
+                match_group = re.search(r'(.*?) - Canada\.ca', title_text)
+                if match_group:
+                    group_name = match_group.group(1).strip()
+            
+            # --- Extract Expiry Date (from new script) ---
+            expiry_date = "N/A"
+            expiry_date_tag = soup.find(string=re.compile(r'Expiry date:'))
+            if expiry_date_tag:
+                expiry_element = expiry_date_tag.find_parent()
+                if expiry_element:
+                    match_expiry = re.search(r'Expiry date:\s*(.*)', expiry_element.get_text(strip=True))
+                    if match_expiry:
+                        expiry_date = match_expiry.group(1).strip()
 
-            # --- Your Content Grouping Logic ---
+            # --- Content Grouping Logic (from original script) ---
             grouped_sections = []
             main_content_section = soup.find('div', class_='mwsgeneric-base-html')
             if main_content_section:
@@ -54,7 +62,7 @@ def find_provisions_in_agreements(urls, keywords):
                         current_section_elements.append(element)
                 if current_section_elements: grouped_sections.append(current_section_elements)
             
-            # --- Your Keyword Searching Logic ---
+            # --- Keyword Searching Logic (from original script) ---
             if grouped_sections and keywords:
                 for section_elements in grouped_sections:
                     section_text = ' '.join(elem.get_text() for elem in section_elements)
@@ -66,8 +74,10 @@ def find_provisions_in_agreements(urls, keywords):
                         # Reconstruct the section content for display
                         display_content = "\n\n".join(elem.get_text(strip=True) for elem in section_elements if elem.get_text(strip=True))
                         
+                        # Append the combined result, now including the expiry date
                         all_results.append({
                             'Group': group_name,
+                            'Expiry Date': expiry_date,
                             'Keyword': ', '.join(sorted(list(set(found_keywords_in_section)))),
                             'Provision': display_content
                         })
@@ -81,14 +91,13 @@ def find_provisions_in_agreements(urls, keywords):
 
 # ==============================================================================
 # STREAMLIT USER INTERFACE CODE
-# This is the "menu" part of the app that the user will interact with.
 # ==============================================================================
 
 st.set_page_config(layout="wide")
 st.title("📄 Collective Agreement Provision Finder")
 st.info("Paste your keywords below, one per line or separated by commas. The app will scan all collective agreements and extract the relevant provisions.")
 
-# List of URLs from your script
+# List of URLs to scrape
 list_of_webpage_urls = [
     'https://www.canada.ca/en/treasury-board-secretariat/topics/pay/collective-agreements/ai.html',
     'https://www.canada.ca/en/treasury-board-secretariat/topics/pay/collective-agreements/ao.html',
@@ -120,6 +129,7 @@ list_of_webpage_urls = [
     'https://www.canada.ca/en/treasury-board-secretariat/topics/pay/collective-agreements/ut.html',
 ]
 
+# Get keyword input from the user
 keyword_input = st.text_area(
     "Enter Keywords",
     height=150,
@@ -133,15 +143,16 @@ if st.button("Find Provisions"):
         # Clean up the keyword input
         keywords = [k.strip() for k in keyword_input.replace(',', '\n').split('\n') if k.strip()]
         
-        # Call your logic function
+        # Call the main logic function
         results = find_provisions_in_agreements(list_of_webpage_urls, keywords)
 
         if results:
             st.success(f"Found {len(results)} relevant provisions!")
             
-            # Convert results to a Pandas DataFrame for easy viewing and download
+            # Convert results to a Pandas DataFrame
             df = pd.DataFrame(results)
-            df = df[['Group', 'Keyword', 'Provision']] # Ensure column order
+            # Ensure desired column order, now including 'Expiry Date'
+            df = df[['Group', 'Expiry Date', 'Keyword', 'Provision']] 
             
             st.dataframe(df, use_container_width=True, height=600)
             
