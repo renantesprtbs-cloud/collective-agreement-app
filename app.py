@@ -5,8 +5,34 @@ from bs4 import BeautifulSoup
 import re
 
 # ==============================================================================
+# NEW HELPER FUNCTION TO CREATE THE AI-FRIENDLY TXT FILE
+# ==============================================================================
+def convert_results_to_txt(results):
+    """
+    Converts the list of result dictionaries into a single, formatted
+    plain text string suitable for an AI model.
+    """
+    txt_output = []
+    for record in results:
+        # Replace newlines in the provision text with [NL]
+        provision_text = record.get('Provision', '').replace('\n', '[NL]')
+        
+        # Build the string for each record
+        record_str = (
+            "--- START RECORD ---\n"
+            f"Group: {record.get('Group', 'N/A')}\n"
+            f"Expiry Date: {record.get('Expiry Date', 'N/A')}\n"
+            f"Keyword: {record.get('Keyword', 'N/A')}\n"
+            f"Provision: {provision_text}\n"
+            "--- END RECORD ---"
+        )
+        txt_output.append(record_str)
+    
+    # Join all records with two newlines for readability
+    return "\n\n".join(txt_output)
+
+# ==============================================================================
 # CORE LOGIC FUNCTION
-# Combines the Streamlit structure with the expiry date extraction logic.
 # ==============================================================================
 def find_provisions_in_agreements(urls, keywords):
     """
@@ -15,12 +41,10 @@ def find_provisions_in_agreements(urls, keywords):
     """
     all_results = []
     
-    # Create a progress bar for user feedback in the Streamlit app
     progress_bar = st.progress(0, text="Initializing...")
     total_urls = len(urls)
 
     for i, url in enumerate(urls):
-        # Update progress bar
         progress_text = f"Processing agreement {i+1}/{total_urls}..."
         progress_bar.progress((i) / total_urls, text=progress_text)
 
@@ -29,7 +53,6 @@ def find_provisions_in_agreements(urls, keywords):
             response.raise_for_status()
             soup = BeautifulSoup(response.text, 'html.parser')
 
-            # --- Extract Group Name (from new script) ---
             group_name = "N/A"
             title_tag = soup.find('title')
             if title_tag:
@@ -38,7 +61,6 @@ def find_provisions_in_agreements(urls, keywords):
                 if match_group:
                     group_name = match_group.group(1).strip()
             
-            # --- Extract Expiry Date (from new script) ---
             expiry_date = "N/A"
             expiry_date_tag = soup.find(string=re.compile(r'Expiry date:'))
             if expiry_date_tag:
@@ -48,7 +70,6 @@ def find_provisions_in_agreements(urls, keywords):
                     if match_expiry:
                         expiry_date = match_expiry.group(1).strip()
 
-            # --- Content Grouping Logic (from original script) ---
             grouped_sections = []
             main_content_section = soup.find('div', class_='mwsgeneric-base-html')
             if main_content_section:
@@ -62,19 +83,15 @@ def find_provisions_in_agreements(urls, keywords):
                         current_section_elements.append(element)
                 if current_section_elements: grouped_sections.append(current_section_elements)
             
-            # --- Keyword Searching Logic (from original script) ---
             if grouped_sections and keywords:
                 for section_elements in grouped_sections:
                     section_text = ' '.join(elem.get_text() for elem in section_elements)
                     
-                    # Find which keywords match in the entire section text
                     found_keywords_in_section = [kw for kw in keywords if kw.lower() in section_text.lower()]
                     
                     if found_keywords_in_section:
-                        # Reconstruct the section content for display
                         display_content = "\n\n".join(elem.get_text(strip=True) for elem in section_elements if elem.get_text(strip=True))
                         
-                        # Append the combined result, now including the expiry date
                         all_results.append({
                             'Group': group_name,
                             'Expiry Date': expiry_date,
@@ -84,7 +101,7 @@ def find_provisions_in_agreements(urls, keywords):
 
         except requests.exceptions.RequestException as e:
             st.error(f"Could not process {url}. Error: {e}")
-            continue # Skip to the next URL if one fails
+            continue
 
     progress_bar.progress(1.0, text="Completed!")
     return all_results
@@ -97,7 +114,6 @@ st.set_page_config(layout="wide")
 st.title("📄 Collective Agreement Provision Finder")
 st.info("Paste your keywords below, one per line or separated by commas. The app will scan all collective agreements and extract the relevant provisions.")
 
-# List of URLs to scrape
 list_of_webpage_urls = [
     'https://www.canada.ca/en/treasury-board-secretariat/topics/pay/collective-agreements/ai.html',
     'https://www.canada.ca/en/treasury-board-secretariat/topics/pay/collective-agreements/ao.html',
@@ -129,7 +145,6 @@ list_of_webpage_urls = [
     'https://www.canada.ca/en/treasury-board-secretariat/topics/pay/collective-agreements/ut.html',
 ]
 
-# Get keyword input from the user
 keyword_input = st.text_area(
     "Enter Keywords",
     height=150,
@@ -140,29 +155,39 @@ if st.button("Find Provisions"):
     if not keyword_input.strip():
         st.warning("Please enter at least one keyword.")
     else:
-        # Clean up the keyword input
         keywords = [k.strip() for k in keyword_input.replace(',', '\n').split('\n') if k.strip()]
         
-        # Call the main logic function
         results = find_provisions_in_agreements(list_of_webpage_urls, keywords)
 
         if results:
             st.success(f"Found {len(results)} relevant provisions!")
             
-            # Convert results to a Pandas DataFrame
             df = pd.DataFrame(results)
-            # Ensure desired column order, now including 'Expiry Date'
             df = df[['Group', 'Expiry Date', 'Keyword', 'Provision']] 
             
             st.dataframe(df, use_container_width=True, height=600)
             
-            # Convert DataFrame to CSV for the download button
-            csv = df.to_csv(index=False).encode('utf-8')
-            st.download_button(
-               label="Download Results as CSV",
-               data=csv,
-               file_name="agreement_provisions.csv",
-               mime="text/csv",
-            )
+            # --- PREPARE DATA FOR DOWNLOAD BUTTONS ---
+            # Prepare CSV data
+            csv_data = df.to_csv(index=False).encode('utf-8')
+            # Prepare TXT data using the new helper function
+            txt_data = convert_results_to_txt(results)
+
+            # --- DISPLAY DOWNLOAD BUTTONS SIDE-BY-SIDE ---
+            col1, col2 = st.columns(2)
+            with col1:
+                st.download_button(
+                   label="Download Results as CSV",
+                   data=csv_data,
+                   file_name="agreement_provisions.csv",
+                   mime="text/csv",
+                )
+            with col2:
+                st.download_button(
+                   label="Download as TXT (for AI import)",
+                   data=txt_data,
+                   file_name="agreement_provisions.txt",
+                   mime="text/plain",
+                )
         else:
             st.warning("No provisions found matching the given keywords across all agreements.")
