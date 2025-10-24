@@ -5,12 +5,17 @@ from bs4 import BeautifulSoup
 import re
 
 # ==============================================================================
-# HELPER AND CORE LOGIC FUNCTIONS (Final Update for List Formatting)
+# HELPER AND CORE LOGIC FUNCTIONS (Final Corrected Version)
 # ==============================================================================
 def convert_results_to_txt(results):
+    """
+    Converts the list of result dictionaries into a single, formatted
+    plain text string suitable for an AI model.
+    """
     txt_output = []
     for record in results:
         provision_text = record.get('Paragraph', '').replace('\n', '[NL]')
+        
         record_str = (
             "--- START RECORD ---\n"
             f"Collective Agreement: {record.get('Collective Agreement', 'N/A')}\n"
@@ -22,9 +27,14 @@ def convert_results_to_txt(results):
             "--- END RECORD ---"
         )
         txt_output.append(record_str)
+    
     return "\n\n".join(txt_output)
 
 def find_provisions_in_agreements(urls, keywords):
+    """
+    Scrapes a list of URLs, applies "Smart Context" logic, and correctly
+    preserves list formatting.
+    """
     all_results = []
     urls_with_matches = set()
     all_group_names = set()
@@ -58,7 +68,7 @@ def find_provisions_in_agreements(urls, keywords):
             grouped_sections = []
             main_content_section = soup.find('div', class_='mwsgeneric-base-html')
             if main_content_section:
-                elements = main_content_section.find_all(True, recursive=False) # Get direct children
+                elements = main_content_section.find_all(True, recursive=False)
                 current_section_elements = []
                 for element in elements:
                     if element.name in ['h2', 'h3']:
@@ -71,44 +81,34 @@ def find_provisions_in_agreements(urls, keywords):
             match_found_in_url = False
             if grouped_sections and keywords:
                 for section_elements in grouped_sections:
-                    # *** NEW STRUCTURE-AWARE FORMATTING LOGIC ***
-                    def format_display_content(elements):
+                    # *** NEW, CORRECTED STRUCTURE-AWARE FORMATTING LOGIC ***
+                    def format_display_content(elements_to_format):
                         content_parts = []
                         
                         def get_alpha_char(n):
                             return chr(ord('a') + n - 1)
 
-                        for elem in elements:
-                            text = elem.get_text(strip=True)
-                            if not text: continue
-                            
-                            if elem.name in ['h2', 'h3', 'h4', 'h5', 'h6', 'p']:
-                                content_parts.append(text)
+                        for elem in elements_to_format:
+                            if elem.name in ['p', 'h2', 'h3', 'h4', 'h5', 'h6']:
+                                text = elem.get_text(strip=True)
+                                if text: content_parts.append(text)
                             elif elem.name in ['ol', 'ul']:
                                 list_items = elem.find_all('li', recursive=False)
                                 if not list_items: continue
-
                                 is_ordered = elem.name == 'ol'
                                 start_index = int(elem.get('start', 1))
+                                is_lower_alpha = 'lst-lwr-alph' in elem.get('class', [])
                                 
-                                list_class = elem.get('class', [])
-                                is_lower_alpha = 'lst-lwr-alph' in list_class
-
                                 for idx, li in enumerate(list_items):
                                     li_text = li.get_text(strip=True)
                                     if li_text:
-                                        prefix = ""
+                                        prefix = "•" # Default for ul
                                         if is_ordered:
-                                            if is_lower_alpha:
-                                                prefix = f"{get_alpha_char(start_index + idx)}."
-                                            else:
-                                                prefix = f"{start_index + idx}."
-                                        else:
-                                            prefix = "•"
+                                            if is_lower_alpha: prefix = f"{get_alpha_char(start_index + idx)}."
+                                            else: prefix = f"{start_index + idx}."
                                         content_parts.append(f"    {prefix} {li_text}")
                         return "\n\n".join(content_parts)
 
-                    # --- Search Logic (largely the same, but calls the new formatter) ---
                     heading_elements = [el for el in section_elements if el.name in ['h2', 'h3', 'h4', 'h5', 'h6']]
                     heading_text = ' '.join(h.get_text(strip=True).lower() for h in heading_elements)
                     found_in_heading = [kw for kw in keywords if kw.lower() in heading_text]
@@ -122,14 +122,22 @@ def find_provisions_in_agreements(urls, keywords):
                         })
                         match_found_in_url = True
                     else:
-                        body_elements = [el for el in section_elements if el.name not in ['h2', 'h3']]
-                        body_text_for_search = ' '.join(el.get_text(strip=True).lower() for el in body_elements)
-                        found_in_body = [kw for kw in keywords if kw.lower() in body_text_for_search]
+                        # Revert to a more precise body search
+                        body_elements = [el for el in section_elements if el.name not in ['h2', 'h3', 'h4', 'h5', 'h6']]
+                        matching_body_elements = []
+                        found_in_body = []
+                        for content_elem in body_elements:
+                            # Search each element (p, li, ol, ul) individually
+                            content_text = content_elem.get_text(strip=True)
+                            if content_text:
+                                found_keywords_in_elem = [kw for kw in keywords if kw.lower() in content_text.lower()]
+                                if found_keywords_in_elem:
+                                    matching_body_elements.append(content_elem)
+                                    found_in_body.extend(found_keywords_in_elem)
                         
-                        if found_in_body:
-                            # If a keyword is found anywhere in the body, we now format the whole section
-                            # This ensures we get context, including headings and lists
-                            display_content = format_display_content(section_elements)
+                        if matching_body_elements:
+                            elements_to_display = heading_elements + matching_body_elements
+                            display_content = format_display_content(elements_to_display)
                             all_results.append({
                                 'Collective Agreement': group_name, 'Expiry Date': expiry_date,
                                 'Keyword': ', '.join(sorted(list(set(found_in_body)))),
@@ -175,37 +183,4 @@ if st.button("Find Provisions"):
         st.session_state['results'] = None
         st.session_state['summary'] = None
     else:
-        keywords = [k.strip() for k in keyword_input.replace(',', '\n').split('\n') if k.strip()]
-        results, summary = find_provisions_in_agreements(list_of_webpage_urls, keywords)
-        st.session_state['results'] = results if results else []
-        st.session_state['summary'] = summary
-
-if st.session_state['results'] is not None:
-    if st.session_state['summary']:
-        summary = st.session_state['summary']
-        st.subheader("Search Summary")
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Agreements Searched", summary['total_searched'])
-        col2.metric("Agreements with Matches", summary['found_in'])
-        col3.metric("Agreements without Matches", summary['not_found_in_count'])
-        if summary['not_found_in_list']:
-            with st.expander("Show Agreements Without Matches"):
-                st.write(summary['not_found_in_list'])
-
-    if st.session_state['results']:
-        results = st.session_state['results']
-        st.success(f"Found {len(results)} relevant provisions!")
-        df = pd.DataFrame(results)
-        df = df[['Collective Agreement', 'Expiry Date', 'Match Location', 'Keyword', 'Source URL', 'Paragraph']]
-        st.dataframe(df, use_container_width=True, height=600,
-            column_config={"Source URL": st.column_config.LinkColumn("Source Link", display_text="🔗 Link")}
-        )
-        csv_data = df.to_csv(index=False).encode('utf-8')
-        txt_data = convert_results_to_txt(results)
-        col1, col2 = st.columns(2)
-        with col1:
-            st.download_button(label="Download Results as CSV", data=csv_data, file_name="agreement_provisions.csv", mime="text/csv", key="csv_download")
-        with col2:
-            st.download_button(label="Download as TXT (for AI import)", data=txt_data, file_name="agreement_provisions.txt", mime="text/plain", key="txt_download")
-    else:
-        st.warning("No provisions found matching the given keywords across all agreements.")
+        keywords = [k.strip()
