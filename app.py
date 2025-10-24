@@ -183,4 +183,37 @@ if st.button("Find Provisions"):
         st.session_state['results'] = None
         st.session_state['summary'] = None
     else:
-        keywords = [k.strip()
+        keywords = [k.strip() for k in keyword_input.replace(',', '\n').split('\n') if k.strip()]
+        results, summary = find_provisions_in_agreements(list_of_webpage_urls, keywords)
+        st.session_state['results'] = results if results else []
+        st.session_state['summary'] = summary
+
+if st.session_state['results'] is not None:
+    if st.session_state['summary']:
+        summary = st.session_state['summary']
+        st.subheader("Search Summary")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Agreements Searched", summary['total_searched'])
+        col2.metric("Agreements with Matches", summary['found_in'])
+        col3.metric("Agreements without Matches", summary['not_found_in_count'])
+        if summary['not_found_in_list']:
+            with st.expander("Show Agreements Without Matches"):
+                st.write(summary['not_found_in_list'])
+
+    if st.session_state['results']:
+        results = st.session_state['results']
+        st.success(f"Found {len(results)} relevant provisions!")
+        df = pd.DataFrame(results)
+        df = df[['Collective Agreement', 'Expiry Date', 'Match Location', 'Keyword', 'Source URL', 'Paragraph']]
+        st.dataframe(df, use_container_width=True, height=600,
+            column_config={"Source URL": st.column_config.LinkColumn("Source Link", display_text="🔗 Link")}
+        )
+        csv_data = df.to_csv(index=False).encode('utf-8')
+        txt_data = convert_results_to_txt(results)
+        col1, col2 = st.columns(2)
+        with col1:
+            st.download_button(label="Download Results as CSV", data=csv_data, file_name="agreement_provisions.csv", mime="text/csv", key="csv_download")
+        with col2:
+            st.download_button(label="Download as TXT (for AI import)", data=txt_data, file_name="agreement_provisions.txt", mime="text/plain", key="txt_download")
+    else:
+        st.warning("No provisions found matching the given keywords across all agreements.")
