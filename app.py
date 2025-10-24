@@ -5,7 +5,7 @@ from bs4 import BeautifulSoup
 import re
 
 # ==============================================================================
-# HELPER AND CORE LOGIC FUNCTIONS (Final Corrected Version)
+# HELPER AND CORE LOGIC FUNCTIONS (Final Update for List Formatting)
 # ==============================================================================
 def convert_results_to_txt(results):
     """
@@ -97,7 +97,8 @@ def find_provisions_in_agreements(urls, keywords):
                                 if not list_items: continue
                                 is_ordered = elem.name == 'ol'
                                 start_index = int(elem.get('start', 1))
-                                is_lower_alpha = 'lst-lwr-alph' in elem.get('class', [])
+                                list_class = elem.get('class', [])
+                                is_lower_alpha = 'lst-lwr-alph' in list_class
                                 
                                 for idx, li in enumerate(list_items):
                                     li_text = li.get_text(strip=True)
@@ -122,22 +123,14 @@ def find_provisions_in_agreements(urls, keywords):
                         })
                         match_found_in_url = True
                     else:
-                        # Revert to a more precise body search
-                        body_elements = [el for el in section_elements if el.name not in ['h2', 'h3', 'h4', 'h5', 'h6']]
-                        matching_body_elements = []
-                        found_in_body = []
-                        for content_elem in body_elements:
-                            # Search each element (p, li, ol, ul) individually
-                            content_text = content_elem.get_text(strip=True)
-                            if content_text:
-                                found_keywords_in_elem = [kw for kw in keywords if kw.lower() in content_text.lower()]
-                                if found_keywords_in_elem:
-                                    matching_body_elements.append(content_elem)
-                                    found_in_body.extend(found_keywords_in_elem)
+                        # Revert to a more precise body search, now using the full section for formatting
+                        body_text_for_search = ' '.join(el.get_text(strip=True).lower() for el in section_elements if el.name not in ['h2', 'h3'])
+                        found_in_body = [kw for kw in keywords if kw.lower() in body_text_for_search]
                         
-                        if matching_body_elements:
-                            elements_to_display = heading_elements + matching_body_elements
-                            display_content = format_display_content(elements_to_display)
+                        if found_in_body:
+                            # If a keyword is found anywhere in the body, format the whole section
+                            # to ensure we capture headings and full list context.
+                            display_content = format_display_content(section_elements)
                             all_results.append({
                                 'Collective Agreement': group_name, 'Expiry Date': expiry_date,
                                 'Keyword': ', '.join(sorted(list(set(found_in_body)))),
