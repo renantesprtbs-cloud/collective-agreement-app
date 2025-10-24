@@ -5,7 +5,7 @@ from bs4 import BeautifulSoup
 import re
 
 # ==============================================================================
-# HELPER AND CORE LOGIC FUNCTIONS (Final Update for List Formatting)
+# HELPER AND CORE LOGIC FUNCTIONS (Final Corrected Version for List Formatting)
 # ==============================================================================
 def convert_results_to_txt(results):
     """
@@ -14,6 +14,7 @@ def convert_results_to_txt(results):
     """
     txt_output = []
     for record in results:
+        # The Paragraph field now has preserved formatting, so we just replace newlines
         provision_text = record.get('Paragraph', '').replace('\n', '[NL]')
         
         record_str = (
@@ -33,7 +34,7 @@ def convert_results_to_txt(results):
 def find_provisions_in_agreements(urls, keywords):
     """
     Scrapes a list of URLs, applies "Smart Context" logic, and correctly
-    preserves list formatting.
+    preserves and re-creates list formatting.
     """
     all_results = []
     urls_with_matches = set()
@@ -68,6 +69,7 @@ def find_provisions_in_agreements(urls, keywords):
             grouped_sections = []
             main_content_section = soup.find('div', class_='mwsgeneric-base-html')
             if main_content_section:
+                # Get direct children of the main content div to respect sectioning
                 elements = main_content_section.find_all(True, recursive=False)
                 current_section_elements = []
                 for element in elements:
@@ -81,60 +83,65 @@ def find_provisions_in_agreements(urls, keywords):
             match_found_in_url = False
             if grouped_sections and keywords:
                 for section_elements in grouped_sections:
-                    # *** NEW, CORRECTED STRUCTURE-AWARE FORMATTING LOGIC ***
+                    
+                    # *** NEW, DEFINITIVE STRUCTURE-AWARE FORMATTING LOGIC ***
                     def format_display_content(elements_to_format):
                         content_parts = []
                         
                         def get_alpha_char(n):
+                            # Converts a number (1, 2, 3) to a letter ('a', 'b', 'c')
                             return chr(ord('a') + n - 1)
 
                         for elem in elements_to_format:
                             if elem.name in ['p', 'h2', 'h3', 'h4', 'h5', 'h6']:
                                 text = elem.get_text(strip=True)
                                 if text: content_parts.append(text)
-                            elif elem.name in ['ol', 'ul']:
+                            elif elem.name == 'ul': # Unordered list (bullets)
+                                for li in elem.find_all('li', recursive=False):
+                                    li_text = li.get_text(strip=True)
+                                    if li_text: content_parts.append(f"    • {li_text}")
+                            elif elem.name == 'ol': # Ordered list (numbers/letters)
                                 list_items = elem.find_all('li', recursive=False)
                                 if not list_items: continue
-                                is_ordered = elem.name == 'ol'
+                                
                                 start_index = int(elem.get('start', 1))
                                 list_class = elem.get('class', [])
                                 is_lower_alpha = 'lst-lwr-alph' in list_class
+                                is_upper_alpha = 'lst-upr-alph' in list_class
+                                is_lower_roman = 'lst-lwr-rmn' in list_class
+                                # Add more class checks here if needed (e.g., for Roman numerals)
                                 
                                 for idx, li in enumerate(list_items):
                                     li_text = li.get_text(strip=True)
                                     if li_text:
-                                        prefix = "•" # Default for ul
-                                        if is_ordered:
-                                            if is_lower_alpha: prefix = f"{get_alpha_char(start_index + idx)}."
-                                            else: prefix = f"{start_index + idx}."
+                                        current_index = start_index + idx
+                                        prefix = f"{current_index}." # Default for numbered lists
+                                        if is_lower_alpha:
+                                            prefix = f"{get_alpha_char(current_index)}."
+                                        # You can add more 'elif' conditions here for other list types
                                         content_parts.append(f"    {prefix} {li_text}")
                         return "\n\n".join(content_parts)
 
-                    heading_elements = [el for el in section_elements if el.name in ['h2', 'h3', 'h4', 'h5', 'h6']]
-                    heading_text = ' '.join(h.get_text(strip=True).lower() for h in heading_elements)
-                    found_in_heading = [kw for kw in keywords if kw.lower() in heading_text]
+                    # --- Search Logic ---
+                    # The search now checks the entire section's text at once for a match.
+                    section_text_for_search = ' '.join(el.get_text(strip=True).lower() for el in section_elements)
+                    found_keywords = [kw for kw in keywords if kw.lower() in section_text_for_search]
 
-                    if found_in_heading:
-                        display_content = format_display_content(section_elements)
-                        all_results.append({
-                            'Collective Agreement': group_name, 'Expiry Date': expiry_date,
-                            'Keyword': ', '.join(sorted(list(set(found_in_heading)))),
-                            'Match Location': "Heading", 'Paragraph': display_content, 'Source URL': url
-                        })
-                        match_found_in_url = True
-                    else:
-                        # Revert to a more precise body search, now using the full section for formatting
-                        body_text_for_search = ' '.join(el.get_text(strip=True).lower() for el in section_elements if el.name not in ['h2', 'h3'])
-                        found_in_body = [kw for kw in keywords if kw.lower() in body_text_for_search]
+                    if found_keywords:
+                        # Determine if the primary match was in a heading for classification
+                        heading_text = ' '.join(h.get_text(strip=True).lower() for h in section_elements if h.name in ['h2','h3','h4','h5','h6'])
+                        is_heading_match = any(kw.lower() in heading_text for kw in found_keywords)
+                        match_location = "Heading" if is_heading_match else "Body"
                         
-                        if found_in_body:
-                            # If a keyword is found anywhere in the body, format the whole section
-                            # to ensure we capture headings and full list context.
-                            display_content = format_display_content(section_elements)
+                        # Format the entire section to preserve context and structure
+                        display_content = format_display_content(section_elements)
+                        
+                        if display_content: # Only add if there's actual text content
                             all_results.append({
                                 'Collective Agreement': group_name, 'Expiry Date': expiry_date,
-                                'Keyword': ', '.join(sorted(list(set(found_in_body)))),
-                                'Match Location': "Body", 'Paragraph': display_content, 'Source URL': url
+                                'Keyword': ', '.join(sorted(list(set(found_keywords)))),
+                                'Match Location': match_location, 'Paragraph': display_content, 
+                                'Source URL': url
                             })
                             match_found_in_url = True
             
