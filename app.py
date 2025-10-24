@@ -5,18 +5,12 @@ from bs4 import BeautifulSoup
 import re
 
 # ==============================================================================
-# HELPER AND CORE LOGIC FUNCTIONS (Final Corrected Version for List Formatting)
+# HELPER AND CORE LOGIC FUNCTIONS (Final Corrected and Simplified Version)
 # ==============================================================================
 def convert_results_to_txt(results):
-    """
-    Converts the list of result dictionaries into a single, formatted
-    plain text string suitable for an AI model.
-    """
     txt_output = []
     for record in results:
-        # The Paragraph field now has preserved formatting, so we just replace newlines
         provision_text = record.get('Paragraph', '').replace('\n', '[NL]')
-        
         record_str = (
             "--- START RECORD ---\n"
             f"Collective Agreement: {record.get('Collective Agreement', 'N/A')}\n"
@@ -28,14 +22,9 @@ def convert_results_to_txt(results):
             "--- END RECORD ---"
         )
         txt_output.append(record_str)
-    
     return "\n\n".join(txt_output)
 
 def find_provisions_in_agreements(urls, keywords):
-    """
-    Scrapes a list of URLs, applies "Smart Context" logic, and correctly
-    preserves and re-creates list formatting.
-    """
     all_results = []
     urls_with_matches = set()
     all_group_names = set()
@@ -69,7 +58,6 @@ def find_provisions_in_agreements(urls, keywords):
             grouped_sections = []
             main_content_section = soup.find('div', class_='mwsgeneric-base-html')
             if main_content_section:
-                # Get direct children of the main content div to respect sectioning
                 elements = main_content_section.find_all(True, recursive=False)
                 current_section_elements = []
                 for element in elements:
@@ -84,59 +72,65 @@ def find_provisions_in_agreements(urls, keywords):
             if grouped_sections and keywords:
                 for section_elements in grouped_sections:
                     
-                    # *** NEW, DEFINITIVE STRUCTURE-AWARE FORMATTING LOGIC ***
-                    def format_display_content(elements_to_format):
-                        content_parts = []
-                        
-                        def get_alpha_char(n):
-                            # Converts a number (1, 2, 3) to a letter ('a', 'b', 'c')
-                            return chr(ord('a') + n - 1)
+                    # *** NEW, DEFINITIVE AND SIMPLIFIED LOGIC ***
+                    heading_elements = [el for el in section_elements if el.name in ['h2', 'h3', 'h4', 'h5', 'h6']]
+                    heading_text = ' '.join(h.get_text(strip=True) for h in heading_elements)
+                    
+                    found_keywords = []
+                    matching_content = []
+                    match_location = "Body" # Default
 
-                        for elem in elements_to_format:
-                            if elem.name in ['p', 'h2', 'h3', 'h4', 'h5', 'h6']:
+                    # Check heading for matches
+                    found_in_heading = [kw for kw in keywords if kw.lower() in heading_text.lower()]
+                    if found_in_heading:
+                        match_location = "Heading"
+                        found_keywords.extend(found_in_heading)
+                        # If match is in heading, we want the whole section
+                        matching_content.extend(section_elements)
+                    else:
+                        # If not in heading, check body elements individually
+                        body_elements = [el for el in section_elements if el.name not in ['h2', 'h3', 'h4', 'h5', 'h6']]
+                        temp_matching_body = []
+                        for elem in body_elements:
+                            elem_text = elem.get_text(strip=True)
+                            if elem_text:
+                                found_in_elem = [kw for kw in keywords if kw.lower() in elem_text.lower()]
+                                if found_in_elem:
+                                    temp_matching_body.append(elem)
+                                    found_keywords.extend(found_in_elem)
+                        # Add heading for context if body elements matched
+                        if temp_matching_body:
+                            matching_content.extend(heading_elements)
+                            matching_content.extend(temp_matching_body)
+
+                    if matching_content:
+                        def format_display_content(elements_to_format):
+                            content_parts = []
+                            def get_alpha_char(n): return chr(ord('a') + n - 1)
+
+                            for elem in elements_to_format:
                                 text = elem.get_text(strip=True)
-                                if text: content_parts.append(text)
-                            elif elem.name == 'ul': # Unordered list (bullets)
-                                for li in elem.find_all('li', recursive=False):
-                                    li_text = li.get_text(strip=True)
-                                    if li_text: content_parts.append(f"    • {li_text}")
-                            elif elem.name == 'ol': # Ordered list (numbers/letters)
-                                list_items = elem.find_all('li', recursive=False)
-                                if not list_items: continue
-                                
-                                start_index = int(elem.get('start', 1))
-                                list_class = elem.get('class', [])
-                                is_lower_alpha = 'lst-lwr-alph' in list_class
-                                is_upper_alpha = 'lst-upr-alph' in list_class
-                                is_lower_roman = 'lst-lwr-rmn' in list_class
-                                # Add more class checks here if needed (e.g., for Roman numerals)
-                                
-                                for idx, li in enumerate(list_items):
-                                    li_text = li.get_text(strip=True)
-                                    if li_text:
-                                        current_index = start_index + idx
-                                        prefix = f"{current_index}." # Default for numbered lists
-                                        if is_lower_alpha:
-                                            prefix = f"{get_alpha_char(current_index)}."
-                                        # You can add more 'elif' conditions here for other list types
-                                        content_parts.append(f"    {prefix} {li_text}")
-                        return "\n\n".join(content_parts)
+                                if elem.name in ['p', 'h2', 'h3', 'h4', 'h5', 'h6']:
+                                    if text: content_parts.append(text)
+                                elif elem.name == 'ul':
+                                    for li in elem.find_all('li', recursive=False):
+                                        li_text = li.get_text(strip=True)
+                                        if li_text: content_parts.append(f"    • {li_text}")
+                                elif elem.name == 'ol':
+                                    list_items = elem.find_all('li', recursive=False)
+                                    if list_items:
+                                        start_index = int(elem.get('start', 1))
+                                        is_lower_alpha = 'lst-lwr-alph' in elem.get('class', [])
+                                        for idx, li in enumerate(list_items):
+                                            li_text = li.get_text(strip=True)
+                                            if li_text:
+                                                current_index = start_index + idx
+                                                prefix = f"{get_alpha_char(current_index)}." if is_lower_alpha else f"{current_index}."
+                                                content_parts.append(f"    {prefix} {li_text}")
+                            return "\n\n".join(content_parts)
 
-                    # --- Search Logic ---
-                    # The search now checks the entire section's text at once for a match.
-                    section_text_for_search = ' '.join(el.get_text(strip=True).lower() for el in section_elements)
-                    found_keywords = [kw for kw in keywords if kw.lower() in section_text_for_search]
-
-                    if found_keywords:
-                        # Determine if the primary match was in a heading for classification
-                        heading_text = ' '.join(h.get_text(strip=True).lower() for h in section_elements if h.name in ['h2','h3','h4','h5','h6'])
-                        is_heading_match = any(kw.lower() in heading_text for kw in found_keywords)
-                        match_location = "Heading" if is_heading_match else "Body"
-                        
-                        # Format the entire section to preserve context and structure
-                        display_content = format_display_content(section_elements)
-                        
-                        if display_content: # Only add if there's actual text content
+                        display_content = format_display_content(matching_content)
+                        if display_content:
                             all_results.append({
                                 'Collective Agreement': group_name, 'Expiry Date': expiry_date,
                                 'Keyword': ', '.join(sorted(list(set(found_keywords)))),
