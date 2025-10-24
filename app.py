@@ -14,6 +14,7 @@ def convert_results_to_txt(results):
     """
     txt_output = []
     for record in results:
+        # The Paragraph field now has preserved formatting, so we just replace newlines
         provision_text = record.get('Paragraph', '').replace('\n', '[NL]')
         
         record_str = (
@@ -22,7 +23,7 @@ def convert_results_to_txt(results):
             f"Expiry Date: {record.get('Expiry Date', 'N/A')}\n"
             f"Keyword: {record.get('Keyword', 'N/A')}\n"
             f"Match Location: {record.get('Match Location', 'N/A')}\n"
-            f"Source URL: {record.get('Source URL', 'N/A')}\n" # Added new field
+            f"Source URL: {record.get('Source URL', 'N/A')}\n"
             f"Paragraph: {provision_text}\n"
             "--- END RECORD ---"
         )
@@ -32,7 +33,7 @@ def convert_results_to_txt(results):
 
 def find_provisions_in_agreements(urls, keywords):
     """
-    Scrapes a list of URLs, applies "Smart Context" logic, preserves bullets,
+    Scrapes a list of URLs, applies "Smart Context" logic, preserves list formatting,
     and returns results along with summary statistics.
     """
     all_results = []
@@ -86,16 +87,20 @@ def find_provisions_in_agreements(urls, keywords):
                     heading_text = ' '.join(h.get_text(strip=True).lower() for h in heading_elements)
                     found_in_heading = [kw for kw in keywords if kw.lower() in heading_text]
 
-                    # *** NEW BULLET PRESERVATION LOGIC ***
+                    # *** NEW STRUCTURE-AWARE FORMATTING LOGIC ***
                     def format_display_content(elements):
                         content_parts = []
                         for elem in elements:
-                            text = elem.get_text(strip=True)
-                            if text:
-                                if elem.name == 'li':
-                                    content_parts.append(f"• {text}") # Add bullet for all list items
-                                else:
-                                    content_parts.append(text)
+                            # We only process tags that can contain direct text.
+                            # We ignore container tags like 'ul' and 'ol' to prevent duplication.
+                            if elem.name in ['p', 'h2', 'h3', 'h4', 'h5', 'h6', 'li']:
+                                text = elem.get_text(strip=True)
+                                if text:
+                                    if elem.name == 'li':
+                                        # For list items, add an indent but preserve original numbering/lettering.
+                                        content_parts.append(f"    {text}")
+                                    else:
+                                        content_parts.append(text)
                         return "\n\n".join(content_parts)
 
                     if found_in_heading:
@@ -108,8 +113,11 @@ def find_provisions_in_agreements(urls, keywords):
                         })
                         match_found_in_url = True
                     else:
+                        # Re-structure to get full body elements for context
                         matching_body_elements = []
                         found_in_body = []
+                        
+                        # Check which body elements contain the keywords
                         for content_elem in body_elements:
                             content_text = content_elem.get_text(strip=True)
                             if content_text:
@@ -119,8 +127,10 @@ def find_provisions_in_agreements(urls, keywords):
                                     found_in_body.extend(found_keywords_in_elem)
                         
                         if matching_body_elements:
+                            # Reconstruct with the heading and ONLY the matching body elements
                             elements_to_display = heading_elements + matching_body_elements
                             display_content = format_display_content(elements_to_display)
+
                             all_results.append({
                                 'Collective Agreement': group_name, 'Expiry Date': expiry_date,
                                 'Keyword': ', '.join(sorted(list(set(found_in_body)))),
@@ -138,7 +148,6 @@ def find_provisions_in_agreements(urls, keywords):
 
     progress_bar.progress(1.0, text="Completed!")
     
-    # --- NEW SUMMARY LOGIC ---
     urls_without_matches = sorted(list(all_group_names - urls_with_matches))
     summary_stats = {
         "total_searched": len(urls),
@@ -150,7 +159,7 @@ def find_provisions_in_agreements(urls, keywords):
     return all_results, summary_stats
 
 # ==============================================================================
-# STREAMLIT USER INTERFACE CODE (Updated for Summary and Links)
+# STREAMLIT USER INTERFACE CODE (Unchanged from previous version)
 # ==============================================================================
 
 st.set_page_config(layout="wide")
@@ -183,7 +192,6 @@ if st.button("Find Provisions"):
         st.session_state['summary'] = summary
 
 if st.session_state['results'] is not None:
-    # --- NEW SUMMARY DISPLAY ---
     if st.session_state['summary']:
         summary = st.session_state['summary']
         st.subheader("Search Summary")
@@ -204,12 +212,8 @@ if st.session_state['results'] is not None:
         df = df[['Collective Agreement', 'Expiry Date', 'Match Location', 'Keyword', 'Source URL', 'Paragraph']]
         
         st.dataframe(df, use_container_width=True, height=600,
-            # --- NEW CLICKABLE LINK CONFIG ---
             column_config={
-                "Source URL": st.column_config.LinkColumn(
-                    "Source Link",
-                    display_text="🔗 Link"
-                )
+                "Source URL": st.column_config.LinkColumn("Source Link", display_text="🔗 Link")
             }
         )
         
