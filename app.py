@@ -5,7 +5,7 @@ from bs4 import BeautifulSoup
 import re
 
 # ==============================================================================
-# HELPER AND CORE LOGIC FUNCTIONS (Corrected and Improved)
+# HELPER AND CORE LOGIC FUNCTIONS (Final Version)
 # ==============================================================================
 def convert_results_to_txt(results):
     """
@@ -33,7 +33,7 @@ def convert_results_to_txt(results):
 def find_provisions_in_agreements(urls, keywords):
     """
     Scrapes a list of URLs, applies "Smart Context" logic, correctly preserves
-    numbered/lettered lists, and returns results along with summary statistics.
+    numbered/lettered lists, removes the Table of Contents, and returns results.
     """
     all_results = []
     urls_with_matches = set()
@@ -50,6 +50,13 @@ def find_provisions_in_agreements(urls, keywords):
             response = requests.get(url, timeout=15)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, 'html.parser')
+
+            # --- NEW: REMOVE TABLE OF CONTENTS ---
+            # The GC website uses the "gc-toc" class for its table of contents container.
+            toc_div = soup.find('div', class_='gc-toc')
+            if toc_div:
+                toc_div.decompose() # This removes the entire element from the soup
+            # --- END OF NEW CODE ---
 
             group_name = "N/A"
             title_tag = soup.find('title')
@@ -68,7 +75,6 @@ def find_provisions_in_agreements(urls, keywords):
             grouped_sections = []
             main_content_section = soup.find('div', class_='mwsgeneric-base-html')
             if main_content_section:
-                # IMPORTANT: Find direct children to process them in order, including lists
                 elements = main_content_section.find_all(['p', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol'])
                 current_section_elements = []
                 for element in elements:
@@ -82,11 +88,9 @@ def find_provisions_in_agreements(urls, keywords):
             match_found_in_url = False
             if grouped_sections and keywords:
                 for section_elements in grouped_sections:
-                    # *** NEW ROBUST LIST PARSING LOGIC ***
                     def format_display_content(elements_list):
                         content_parts = []
                         for elem in elements_list:
-                            # Handle different tag types
                             if elem.name in ['h2', 'h3', 'h4', 'h5', 'h6', 'p']:
                                 text = elem.get_text(strip=True)
                                 if text: content_parts.append(text)
@@ -98,22 +102,19 @@ def find_provisions_in_agreements(urls, keywords):
                             elif elem.name == 'ol':
                                 start = int(elem.get('start', 1))
                                 list_items = elem.find_all('li', recursive=False)
-                                
                                 for idx, li in enumerate(list_items):
                                     li_text = li.get_text(strip=True)
                                     if li_text:
                                         if 'lst-lwr-alph' in elem.get('class', []):
                                             list_marker = chr(ord('a') + start + idx - 1)
                                             content_parts.append(f"{list_marker}. {li_text}")
-                                        else: # Default to numbered list
+                                        else:
                                             list_marker = start + idx
                                             content_parts.append(f"{list_marker}. {li_text}")
                         return "\n\n".join(content_parts)
 
-                    # --- Smart Context Search Logic ---
                     heading_elements = [el for el in section_elements if el.name in ['h2', 'h3', 'h4', 'h5', 'h6']]
                     body_elements = [el for el in section_elements if el.name in ['p', 'ul', 'ol']]
-                    
                     heading_text = ' '.join(h.get_text(strip=True).lower() for h in heading_elements)
                     found_in_heading = [kw for kw in keywords if kw.lower() in heading_text]
 
@@ -166,7 +167,7 @@ def find_provisions_in_agreements(urls, keywords):
     return all_results, summary_stats
 
 # ==============================================================================
-# STREAMLIT USER INTERFACE CODE (No changes from the previous good version)
+# STREAMLIT USER INTERFACE CODE (No changes needed)
 # ==============================================================================
 st.set_page_config(layout="wide")
 st.title("📄 Collective Agreement Provision Finder")
