@@ -5,7 +5,7 @@ from bs4 import BeautifulSoup
 import re
 
 # ==============================================================================
-# HELPER AND CORE LOGIC FUNCTIONS (Updated for Advanced List Parsing)
+# HELPER AND CORE LOGIC FUNCTIONS (Corrected and Improved)
 # ==============================================================================
 def convert_results_to_txt(results):
     """
@@ -32,8 +32,8 @@ def convert_results_to_txt(results):
 
 def find_provisions_in_agreements(urls, keywords):
     """
-    Scrapes a list of URLs, applies "Smart Context" logic, preserves bullets,
-    and returns results along with summary statistics.
+    Scrapes a list of URLs, applies "Smart Context" logic, correctly preserves
+    numbered/lettered lists, and returns results along with summary statistics.
     """
     all_results = []
     urls_with_matches = set()
@@ -68,6 +68,7 @@ def find_provisions_in_agreements(urls, keywords):
             grouped_sections = []
             main_content_section = soup.find('div', class_='mwsgeneric-base-html')
             if main_content_section:
+                # IMPORTANT: Find direct children to process them in order, including lists
                 elements = main_content_section.find_all(['p', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol'])
                 current_section_elements = []
                 for element in elements:
@@ -81,33 +82,27 @@ def find_provisions_in_agreements(urls, keywords):
             match_found_in_url = False
             if grouped_sections and keywords:
                 for section_elements in grouped_sections:
-                    # *** NEW ADVANCED LIST PARSING LOGIC STARTS HERE ***
-                    def format_display_content(elements):
+                    # *** NEW ROBUST LIST PARSING LOGIC ***
+                    def format_display_content(elements_list):
                         content_parts = []
-                        for elem in elements:
-                            text = elem.get_text(strip=True)
-                            if not text:
-                                continue
-                            
+                        for elem in elements_list:
                             # Handle different tag types
                             if elem.name in ['h2', 'h3', 'h4', 'h5', 'h6', 'p']:
-                                content_parts.append(text)
+                                text = elem.get_text(strip=True)
+                                if text: content_parts.append(text)
                             elif elem.name == 'ul':
-                                list_items = elem.find_all('li')
+                                list_items = elem.find_all('li', recursive=False)
                                 for li in list_items:
                                     li_text = li.get_text(strip=True)
-                                    if li_text:
-                                        content_parts.append(f"• {li_text}")
+                                    if li_text: content_parts.append(f"• {li_text}")
                             elif elem.name == 'ol':
                                 start = int(elem.get('start', 1))
-                                list_items = elem.find_all('li')
+                                list_items = elem.find_all('li', recursive=False)
                                 
                                 for idx, li in enumerate(list_items):
                                     li_text = li.get_text(strip=True)
                                     if li_text:
-                                        # Check class for lettered list
                                         if 'lst-lwr-alph' in elem.get('class', []):
-                                            # Convert number to letter (a, b, c...)
                                             list_marker = chr(ord('a') + start + idx - 1)
                                             content_parts.append(f"{list_marker}. {li_text}")
                                         else: # Default to numbered list
@@ -115,18 +110,15 @@ def find_provisions_in_agreements(urls, keywords):
                                             content_parts.append(f"{list_marker}. {li_text}")
                         return "\n\n".join(content_parts)
 
-                    # --- Smart Context Search Logic (now uses the better elements list) ---
-                    all_elements_in_section = []
-                    for section_group in section_elements:
-                        all_elements_in_section.extend(section_group.find_all(True, recursive=False))
+                    # --- Smart Context Search Logic ---
+                    heading_elements = [el for el in section_elements if el.name in ['h2', 'h3', 'h4', 'h5', 'h6']]
+                    body_elements = [el for el in section_elements if el.name in ['p', 'ul', 'ol']]
                     
-                    heading_elements = [el for el in all_elements_in_section if el.name in ['h2', 'h3', 'h4', 'h5', 'h6']]
-                    body_elements = [el for el in all_elements_in_section if el.name in ['p', 'ul', 'ol']]
                     heading_text = ' '.join(h.get_text(strip=True).lower() for h in heading_elements)
                     found_in_heading = [kw for kw in keywords if kw.lower() in heading_text]
 
                     if found_in_heading:
-                        display_content = format_display_content(all_elements_in_section)
+                        display_content = format_display_content(section_elements)
                         all_results.append({
                             'Collective Agreement': group_name, 'Expiry Date': expiry_date,
                             'Keyword': ', '.join(sorted(list(set(found_in_heading)))),
@@ -174,7 +166,7 @@ def find_provisions_in_agreements(urls, keywords):
     return all_results, summary_stats
 
 # ==============================================================================
-# STREAMLIT USER INTERFACE CODE (No changes needed here)
+# STREAMLIT USER INTERFACE CODE (No changes from the previous good version)
 # ==============================================================================
 st.set_page_config(layout="wide")
 st.title("📄 Collective Agreement Provision Finder")
