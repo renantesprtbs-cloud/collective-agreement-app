@@ -5,18 +5,12 @@ from bs4 import BeautifulSoup
 import re
 
 # ==============================================================================
-# HELPER AND CORE LOGIC FUNCTIONS (Updated for all new features)
+# HELPER AND CORE LOGIC FUNCTIONS (Final Update for List Formatting)
 # ==============================================================================
 def convert_results_to_txt(results):
-    """
-    Converts the list of result dictionaries into a single, formatted
-    plain text string suitable for an AI model. Now includes Source URL.
-    """
     txt_output = []
     for record in results:
-        # The Paragraph field now has preserved formatting, so we just replace newlines
         provision_text = record.get('Paragraph', '').replace('\n', '[NL]')
-        
         record_str = (
             "--- START RECORD ---\n"
             f"Collective Agreement: {record.get('Collective Agreement', 'N/A')}\n"
@@ -28,14 +22,9 @@ def convert_results_to_txt(results):
             "--- END RECORD ---"
         )
         txt_output.append(record_str)
-    
     return "\n\n".join(txt_output)
 
 def find_provisions_in_agreements(urls, keywords):
-    """
-    Scrapes a list of URLs, applies "Smart Context" logic, preserves list formatting,
-    and returns results along with summary statistics.
-    """
     all_results = []
     urls_with_matches = set()
     all_group_names = set()
@@ -69,7 +58,7 @@ def find_provisions_in_agreements(urls, keywords):
             grouped_sections = []
             main_content_section = soup.find('div', class_='mwsgeneric-base-html')
             if main_content_section:
-                elements = main_content_section.find_all(['p', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'ul', 'ol'])
+                elements = main_content_section.find_all(True, recursive=False) # Get direct children
                 current_section_elements = []
                 for element in elements:
                     if element.name in ['h2', 'h3']:
@@ -82,60 +71,69 @@ def find_provisions_in_agreements(urls, keywords):
             match_found_in_url = False
             if grouped_sections and keywords:
                 for section_elements in grouped_sections:
-                    heading_elements = [el for el in section_elements if el.name in ['h2', 'h3', 'h4', 'h5', 'h6']]
-                    body_elements = [el for el in section_elements if el.name in ['p', 'li']]
-                    heading_text = ' '.join(h.get_text(strip=True).lower() for h in heading_elements)
-                    found_in_heading = [kw for kw in keywords if kw.lower() in heading_text]
-
                     # *** NEW STRUCTURE-AWARE FORMATTING LOGIC ***
                     def format_display_content(elements):
                         content_parts = []
+                        
+                        def get_alpha_char(n):
+                            return chr(ord('a') + n - 1)
+
                         for elem in elements:
-                            # We only process tags that can contain direct text.
-                            # We ignore container tags like 'ul' and 'ol' to prevent duplication.
-                            if elem.name in ['p', 'h2', 'h3', 'h4', 'h5', 'h6', 'li']:
-                                text = elem.get_text(strip=True)
-                                if text:
-                                    if elem.name == 'li':
-                                        # For list items, add an indent but preserve original numbering/lettering.
-                                        content_parts.append(f"    {text}")
-                                    else:
-                                        content_parts.append(text)
+                            text = elem.get_text(strip=True)
+                            if not text: continue
+                            
+                            if elem.name in ['h2', 'h3', 'h4', 'h5', 'h6', 'p']:
+                                content_parts.append(text)
+                            elif elem.name in ['ol', 'ul']:
+                                list_items = elem.find_all('li', recursive=False)
+                                if not list_items: continue
+
+                                is_ordered = elem.name == 'ol'
+                                start_index = int(elem.get('start', 1))
+                                
+                                list_class = elem.get('class', [])
+                                is_lower_alpha = 'lst-lwr-alph' in list_class
+
+                                for idx, li in enumerate(list_items):
+                                    li_text = li.get_text(strip=True)
+                                    if li_text:
+                                        prefix = ""
+                                        if is_ordered:
+                                            if is_lower_alpha:
+                                                prefix = f"{get_alpha_char(start_index + idx)}."
+                                            else:
+                                                prefix = f"{start_index + idx}."
+                                        else:
+                                            prefix = "•"
+                                        content_parts.append(f"    {prefix} {li_text}")
                         return "\n\n".join(content_parts)
+
+                    # --- Search Logic (largely the same, but calls the new formatter) ---
+                    heading_elements = [el for el in section_elements if el.name in ['h2', 'h3', 'h4', 'h5', 'h6']]
+                    heading_text = ' '.join(h.get_text(strip=True).lower() for h in heading_elements)
+                    found_in_heading = [kw for kw in keywords if kw.lower() in heading_text]
 
                     if found_in_heading:
                         display_content = format_display_content(section_elements)
                         all_results.append({
                             'Collective Agreement': group_name, 'Expiry Date': expiry_date,
                             'Keyword': ', '.join(sorted(list(set(found_in_heading)))),
-                            'Match Location': "Heading", 'Paragraph': display_content,
-                            'Source URL': url
+                            'Match Location': "Heading", 'Paragraph': display_content, 'Source URL': url
                         })
                         match_found_in_url = True
                     else:
-                        # Re-structure to get full body elements for context
-                        matching_body_elements = []
-                        found_in_body = []
+                        body_elements = [el for el in section_elements if el.name not in ['h2', 'h3']]
+                        body_text_for_search = ' '.join(el.get_text(strip=True).lower() for el in body_elements)
+                        found_in_body = [kw for kw in keywords if kw.lower() in body_text_for_search]
                         
-                        # Check which body elements contain the keywords
-                        for content_elem in body_elements:
-                            content_text = content_elem.get_text(strip=True)
-                            if content_text:
-                                found_keywords_in_elem = [kw for kw in keywords if kw.lower() in content_text.lower()]
-                                if found_keywords_in_elem:
-                                    matching_body_elements.append(content_elem)
-                                    found_in_body.extend(found_keywords_in_elem)
-                        
-                        if matching_body_elements:
-                            # Reconstruct with the heading and ONLY the matching body elements
-                            elements_to_display = heading_elements + matching_body_elements
-                            display_content = format_display_content(elements_to_display)
-
+                        if found_in_body:
+                            # If a keyword is found anywhere in the body, we now format the whole section
+                            # This ensures we get context, including headings and lists
+                            display_content = format_display_content(section_elements)
                             all_results.append({
                                 'Collective Agreement': group_name, 'Expiry Date': expiry_date,
                                 'Keyword': ', '.join(sorted(list(set(found_in_body)))),
-                                'Match Location': "Body", 'Paragraph': display_content,
-                                'Source URL': url
+                                'Match Location': "Body", 'Paragraph': display_content, 'Source URL': url
                             })
                             match_found_in_url = True
             
@@ -149,17 +147,12 @@ def find_provisions_in_agreements(urls, keywords):
     progress_bar.progress(1.0, text="Completed!")
     
     urls_without_matches = sorted(list(all_group_names - urls_with_matches))
-    summary_stats = {
-        "total_searched": len(urls),
-        "found_in": len(urls_with_matches),
-        "not_found_in_count": len(urls_without_matches),
-        "not_found_in_list": urls_without_matches
-    }
-    
+    summary_stats = {"total_searched": len(urls), "found_in": len(urls_with_matches),
+                     "not_found_in_count": len(urls_without_matches), "not_found_in_list": urls_without_matches}
     return all_results, summary_stats
 
 # ==============================================================================
-# STREAMLIT USER INTERFACE CODE (Unchanged from previous version)
+# STREAMLIT USER INTERFACE CODE (Unchanged)
 # ==============================================================================
 
 st.set_page_config(layout="wide")
@@ -174,11 +167,7 @@ list_of_webpage_urls = [
     'https://www.canada.ca/en/treasury-board-secretariat/topics/pay/collective-agreements/ai.html', 'https://www.canada.ca/en/treasury-board-secretariat/topics/pay/collective-agreements/ao.html', 'https://www.canada.ca/en/treasury-board-secretariat/topics/pay/collective-agreements/sp.html', 'https://www.canada.ca/en/treasury-board-secretariat/topics/pay/collective-agreements/nr.html', 'https://www.canada.ca/en/treasury-board-secretariat/topics/pay/collective-agreements/fb.html', 'https://www.canada.ca/en/treasury-board-secretariat/topics/pay/collective-agreements/cp.html', 'https://www.canada.ca/en/treasury-board-secretariat/topics/pay/collective-agreements/ct.html', 'https://www.canada.ca/en/treasury-board-secretariat/topics/pay/collective-agreements/cx.html', 'https://www.canada.ca/en/treasury-board-secretariat/topics/pay/collective-agreements/ec.html', 'https://www.canada.ca/en/treasury-board-secretariat/topics/pay/collective-agreements/eb.html', 'https://www.canada.ca/en/treasury-board-secretariat/topics/pay/collective-agreements/el.html', 'https://www.canada.ca/en/treasury-board-secretariat/topics/pay/collective-agreements/fs.html', 'https://www.canada.ca/en/treasury-board-secretariat/topics/pay/collective-agreements/sh.html', 'https://www.canada.ca/en/treasury-board-secretariat/topics/pay/collective-agreements/it.html', 'https://www.canada.ca/en/treasury-board-secretariat/topics/pay/collective-agreements/po.html', 'https://www.canada.ca/en/treasury-board-secretariat/topics/pay/collective-agreements/lp.html', 'https://www.canada.ca/en/treasury-board-secretariat/topics/pay/collective-agreements/sv.html', 'https://www.canada.ca/en/treasury-board-secretariat/topics/pay/collective-agreements/pa.html', 'https://www.canada.ca/en/treasury-board-secretariat/topics/pay/collective-agreements/ro.html', 'https://www.canada.ca/en/treasury-board-secretariat/topics/pay/collective-agreements/rm.html', 'https://www.canada.ca/en/treasury-board-secretariat/topics/pay/collective-agreements/re.html', 'https://www.canada.ca/en/treasury-board-secretariat/topics/pay/collective-agreements/src.html', 'https://www.canada.ca/en/treasury-board-secretariat/topics/pay/collective-agreements/sre.html', 'https://www.canada.ca/en/treasury-board-secretariat/topics/pay/collective-agreements/srw.html', 'https://www.canada.ca/en/treasury-board-secretariat/topics/pay/collective-agreements/so.html', 'https://www.canada.ca/en/treasury-board-secretariat/topics/pay/collective-agreements/tc.html', 'https://www.canada.ca/en/treasury-board-secretariat/topics/pay/collective-agreements/tr.html', 'https://www.canada.ca/en/treasury-board-secretariat/topics/pay/collective-agreements/ut.html',
 ]
 
-keyword_input = st.text_area(
-    "Enter Keywords",
-    height=150,
-    placeholder="e.g., severance pay, parental leave, remote work policy"
-)
+keyword_input = st.text_area("Enter Keywords", height=150, placeholder="e.g., severance pay, parental leave, remote work policy")
 
 if st.button("Find Provisions"):
     if not keyword_input.strip():
@@ -199,7 +188,6 @@ if st.session_state['results'] is not None:
         col1.metric("Agreements Searched", summary['total_searched'])
         col2.metric("Agreements with Matches", summary['found_in'])
         col3.metric("Agreements without Matches", summary['not_found_in_count'])
-        
         if summary['not_found_in_list']:
             with st.expander("Show Agreements Without Matches"):
                 st.write(summary['not_found_in_list'])
@@ -207,19 +195,13 @@ if st.session_state['results'] is not None:
     if st.session_state['results']:
         results = st.session_state['results']
         st.success(f"Found {len(results)} relevant provisions!")
-        
         df = pd.DataFrame(results)
         df = df[['Collective Agreement', 'Expiry Date', 'Match Location', 'Keyword', 'Source URL', 'Paragraph']]
-        
         st.dataframe(df, use_container_width=True, height=600,
-            column_config={
-                "Source URL": st.column_config.LinkColumn("Source Link", display_text="🔗 Link")
-            }
+            column_config={"Source URL": st.column_config.LinkColumn("Source Link", display_text="🔗 Link")}
         )
-        
         csv_data = df.to_csv(index=False).encode('utf-8')
         txt_data = convert_results_to_txt(results)
-
         col1, col2 = st.columns(2)
         with col1:
             st.download_button(label="Download Results as CSV", data=csv_data, file_name="agreement_provisions.csv", mime="text/csv", key="csv_download")
