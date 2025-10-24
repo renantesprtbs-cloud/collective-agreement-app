@@ -5,7 +5,7 @@ from bs4 import BeautifulSoup
 import re
 
 # ==============================================================================
-# HELPER AND CORE LOGIC FUNCTIONS (Updated for all new features)
+# HELPER AND CORE LOGIC FUNCTIONS (Updated for Advanced List Parsing)
 # ==============================================================================
 def convert_results_to_txt(results):
     """
@@ -22,7 +22,7 @@ def convert_results_to_txt(results):
             f"Expiry Date: {record.get('Expiry Date', 'N/A')}\n"
             f"Keyword: {record.get('Keyword', 'N/A')}\n"
             f"Match Location: {record.get('Match Location', 'N/A')}\n"
-            f"Source URL: {record.get('Source URL', 'N/A')}\n" # Added new field
+            f"Source URL: {record.get('Source URL', 'N/A')}\n"
             f"Paragraph: {provision_text}\n"
             "--- END RECORD ---"
         )
@@ -68,7 +68,7 @@ def find_provisions_in_agreements(urls, keywords):
             grouped_sections = []
             main_content_section = soup.find('div', class_='mwsgeneric-base-html')
             if main_content_section:
-                elements = main_content_section.find_all(['p', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'ul', 'ol'])
+                elements = main_content_section.find_all(['p', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol'])
                 current_section_elements = []
                 for element in elements:
                     if element.name in ['h2', 'h3']:
@@ -81,25 +81,52 @@ def find_provisions_in_agreements(urls, keywords):
             match_found_in_url = False
             if grouped_sections and keywords:
                 for section_elements in grouped_sections:
-                    heading_elements = [el for el in section_elements if el.name in ['h2', 'h3', 'h4', 'h5', 'h6']]
-                    body_elements = [el for el in section_elements if el.name in ['p', 'li']]
-                    heading_text = ' '.join(h.get_text(strip=True).lower() for h in heading_elements)
-                    found_in_heading = [kw for kw in keywords if kw.lower() in heading_text]
-
-                    # *** NEW BULLET PRESERVATION LOGIC ***
+                    # *** NEW ADVANCED LIST PARSING LOGIC STARTS HERE ***
                     def format_display_content(elements):
                         content_parts = []
                         for elem in elements:
                             text = elem.get_text(strip=True)
-                            if text:
-                                if elem.name == 'li':
-                                    content_parts.append(f"• {text}") # Add bullet for all list items
-                                else:
-                                    content_parts.append(text)
+                            if not text:
+                                continue
+                            
+                            # Handle different tag types
+                            if elem.name in ['h2', 'h3', 'h4', 'h5', 'h6', 'p']:
+                                content_parts.append(text)
+                            elif elem.name == 'ul':
+                                list_items = elem.find_all('li')
+                                for li in list_items:
+                                    li_text = li.get_text(strip=True)
+                                    if li_text:
+                                        content_parts.append(f"• {li_text}")
+                            elif elem.name == 'ol':
+                                start = int(elem.get('start', 1))
+                                list_items = elem.find_all('li')
+                                
+                                for idx, li in enumerate(list_items):
+                                    li_text = li.get_text(strip=True)
+                                    if li_text:
+                                        # Check class for lettered list
+                                        if 'lst-lwr-alph' in elem.get('class', []):
+                                            # Convert number to letter (a, b, c...)
+                                            list_marker = chr(ord('a') + start + idx - 1)
+                                            content_parts.append(f"{list_marker}. {li_text}")
+                                        else: # Default to numbered list
+                                            list_marker = start + idx
+                                            content_parts.append(f"{list_marker}. {li_text}")
                         return "\n\n".join(content_parts)
 
+                    # --- Smart Context Search Logic (now uses the better elements list) ---
+                    all_elements_in_section = []
+                    for section_group in section_elements:
+                        all_elements_in_section.extend(section_group.find_all(True, recursive=False))
+                    
+                    heading_elements = [el for el in all_elements_in_section if el.name in ['h2', 'h3', 'h4', 'h5', 'h6']]
+                    body_elements = [el for el in all_elements_in_section if el.name in ['p', 'ul', 'ol']]
+                    heading_text = ' '.join(h.get_text(strip=True).lower() for h in heading_elements)
+                    found_in_heading = [kw for kw in keywords if kw.lower() in heading_text]
+
                     if found_in_heading:
-                        display_content = format_display_content(section_elements)
+                        display_content = format_display_content(all_elements_in_section)
                         all_results.append({
                             'Collective Agreement': group_name, 'Expiry Date': expiry_date,
                             'Keyword': ', '.join(sorted(list(set(found_in_heading)))),
@@ -138,21 +165,17 @@ def find_provisions_in_agreements(urls, keywords):
 
     progress_bar.progress(1.0, text="Completed!")
     
-    # --- NEW SUMMARY LOGIC ---
     urls_without_matches = sorted(list(all_group_names - urls_with_matches))
     summary_stats = {
-        "total_searched": len(urls),
-        "found_in": len(urls_with_matches),
-        "not_found_in_count": len(urls_without_matches),
-        "not_found_in_list": urls_without_matches
+        "total_searched": len(urls), "found_in": len(urls_with_matches),
+        "not_found_in_count": len(urls_without_matches), "not_found_in_list": urls_without_matches
     }
     
     return all_results, summary_stats
 
 # ==============================================================================
-# STREAMLIT USER INTERFACE CODE (Updated for Summary and Links)
+# STREAMLIT USER INTERFACE CODE (No changes needed here)
 # ==============================================================================
-
 st.set_page_config(layout="wide")
 st.title("📄 Collective Agreement Provision Finder")
 st.info("Paste your keywords below, one per line or separated by commas. The app will scan all collective agreements and extract the relevant provisions.")
@@ -183,7 +206,6 @@ if st.button("Find Provisions"):
         st.session_state['summary'] = summary
 
 if st.session_state['results'] is not None:
-    # --- NEW SUMMARY DISPLAY ---
     if st.session_state['summary']:
         summary = st.session_state['summary']
         st.subheader("Search Summary")
@@ -204,12 +226,8 @@ if st.session_state['results'] is not None:
         df = df[['Collective Agreement', 'Expiry Date', 'Match Location', 'Keyword', 'Source URL', 'Paragraph']]
         
         st.dataframe(df, use_container_width=True, height=600,
-            # --- NEW CLICKABLE LINK CONFIG ---
             column_config={
-                "Source URL": st.column_config.LinkColumn(
-                    "Source Link",
-                    display_text="🔗 Link"
-                )
+                "Source URL": st.column_config.LinkColumn("Source Link", display_text="🔗 Link")
             }
         )
         
