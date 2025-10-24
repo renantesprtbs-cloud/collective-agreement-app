@@ -5,7 +5,7 @@ from bs4 import BeautifulSoup
 import re
 
 # ==============================================================================
-# HELPER AND CORE LOGIC FUNCTIONS (Final Version)
+# HELPER AND CORE LOGIC FUNCTIONS (Final Corrected Version)
 # ==============================================================================
 def convert_results_to_txt(results):
     """
@@ -51,11 +51,15 @@ def find_provisions_in_agreements(urls, keywords):
             response.raise_for_status()
             soup = BeautifulSoup(response.text, 'html.parser')
 
-            # --- NEW: REMOVE TABLE OF CONTENTS ---
-            # The GC website uses the "gc-toc" class for its table of contents container.
-            toc_div = soup.find('div', class_='gc-toc')
-            if toc_div:
-                toc_div.decompose() # This removes the entire element from the soup
+            # --- NEW ROBUST TOC REMOVAL ---
+            # Find a heading that contains the text "Table of contents" (case-insensitive)
+            toc_heading = soup.find(['h2', 'h3'], string=re.compile(r'Table of contents', re.IGNORECASE))
+            if toc_heading:
+                # Get the heading's parent container and remove it from the soup.
+                # This is more robust than looking for a specific class.
+                parent_container = toc_heading.find_parent()
+                if parent_container:
+                    parent_container.decompose()
             # --- END OF NEW CODE ---
 
             group_name = "N/A"
